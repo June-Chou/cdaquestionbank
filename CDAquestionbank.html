@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CDA 练习题模拟题库</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
     <style>
         :root { --accent: #00897B; --header-bg: #1B3A4B; --bg-gray: #f4f4f4; --white: #ffffff; --success: #2ed573; --error: #ff4757; }
         body { font-family: "Segoe UI", Arial, sans-serif; background: var(--bg-gray); margin: 0; padding: 0; }
@@ -42,34 +43,11 @@
         .cache-notice { background: #e3f2fd; color: #0d47a1; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; }
 /* --- 手机端适配优化 --- */
         @media (max-width: 600px) {
-            /* 1. 工具栏改为上下两行排列 */
-            .toolbar {
-                flex-direction: column;
-                align-items: stretch;
-                gap: 15px;
-                padding: 15px;
-            }
-            /* 2. 第一行：题号输入框居中对齐 */
-            .jump-box {
-                justify-content: center;
-                width: 100%;
-            }
-            /* 3. 第二行：按钮容器占满宽度 */
-            .toolbar > div:nth-child(2) {
-                width: 100%;
-                justify-content: space-between;
-            }
-            /* 4. 优化按钮尺寸：平分宽度、禁止文字换行 */
-            .toolbar button {
-                flex: 1;
-                padding: 10px 0;
-                font-size: 0.95rem;
-                white-space: nowrap;
-            }
-            /* 适当缩小输入框，让整体更协调 */
-            .jump-input {
-                width: 55px; 
-            }
+            .toolbar { flex-direction: column; align-items: stretch; gap: 15px; padding: 15px; }
+            .jump-box { justify-content: center; width: 100%; }
+            .toolbar > div:nth-child(2) { width: 100%; justify-content: space-between; }
+            .toolbar button { flex: 1; padding: 10px 0; font-size: 0.95rem; white-space: nowrap; }
+            .jump-input { width: 55px; }
         }
     </style>
 </head>
@@ -86,7 +64,7 @@
         </div>
     </div>
 <div id="upload-section" style="background: white; border: 3px dashed var(--accent); padding: 50px 20px; text-align: center; border-radius: 12px; margin-top: 20px;">
-    <h2 style="margin-bottom: 30px;">请选择要加载的 CDA 模拟题库（PDF）</h2>
+    <h2 style="margin-bottom: 30px;">请选择要加载的 CDA 模拟题库（PDF 或 Word）</h2>
     
     <div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;">
         <button class="btn-main" style="padding: 20px 40px; font-size: 1.2rem; cursor: pointer;" onclick="app.loadFromUrl('./pdf/cn.pdf')">
@@ -98,6 +76,10 @@
         </button>
     </div>
 
+    <p style="color:#666; font-size:0.9rem; white-space: pre-line; margin-top: 20px;">
+        您也可以直接点击此处，上传本地的 .pdf 或 .docx 文件
+    </p>
+    <input type="file" id="file-input" class="hidden" accept=".pdf, .docx">
     <div id="status-msg" style="margin-top:25px; color:var(--accent); font-weight:bold; font-size: 1.1rem;"></div>
 </div>
     <div id="app-container" class="hidden">
@@ -172,37 +154,58 @@
             }
         }
 
+        // 【新增 3】：修改 parse 函数，实现 PDF 和 DOCX 分流处理
         async parse(file) {
             const sm = document.getElementById('status-msg');
-            sm.innerText = "正在清理文档干扰文字并解析...";
+            const extension = file.name.split('.').pop().toLowerCase();
+            
+            if (extension !== 'pdf' && extension !== 'docx') {
+                alert("不支持的文件格式，请上传 PDF 或 DOCX 文件。");
+                return;
+            }
+
+            sm.innerText = `正在读取 ${extension.toUpperCase()} 文档，请稍候...`;
+
             try {
                 const arrayBuffer = await file.arrayBuffer();
-                const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
                 let fullText = "";
-                for (let i = 1; i <= pdf.numPages; i++) {
-                    const page = await pdf.getPage(i);
-                    const content = await page.getTextContent();
-                    fullText += content.items.map(item => item.str).join(' ') + "\n";
+
+                if (extension === 'pdf') {
+                    const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        sm.innerText = `正在提取 PDF 文字: 第 ${i}/${pdf.numPages} 页...`;
+                        const page = await pdf.getPage(i);
+                        const content = await page.getTextContent();
+                        fullText += content.items.map(item => item.str).join(' ') + "\n";
+                    }
+                } else if (extension === 'docx') {
+                    sm.innerText = "正在提取 DOCX 文字结构...";
+                    // 使用 Mammoth 提取纯文本
+                    const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+                    fullText = result.value; 
                 }
-                this.extract(fullText);
-            } catch (err) { alert("解析失败: " + err.message); }
+
+                sm.innerText = "正在清理文档干扰文字并执行解析逻辑...";
+                
+                setTimeout(() => {
+                    this.extract(fullText);
+                }, 100);
+
+            } catch (err) { alert(`解析 ${extension.toUpperCase()} 失败: ` + err.message); }
         }
-        // 新增：从指定 URL 直接读取并解析 PDF 的方法
+
         async loadFromUrl(url) {
             const sm = document.getElementById('status-msg');
             sm.innerText = "正在从服务器拉取题库文件，请稍候...";
             
-            // 禁用按钮防止重复点击
             const buttons = document.querySelectorAll('#upload-section button');
             buttons.forEach(b => b.disabled = true);
 
             try {
-                // 使用 PDF.js 原生方法直接从 URL 加载文件
                 const loadingTask = pdfjsLib.getDocument(url);
                 const pdf = await loadingTask.promise;
                 let fullText = "";
                 
-                // 逐页提取文本
                 for (let i = 1; i <= pdf.numPages; i++) {
                     sm.innerText = `正在提取文字: 第 ${i}/${pdf.numPages} 页...`;
                     const page = await pdf.getPage(i);
@@ -211,21 +214,15 @@
                 }
                 
                 sm.innerText = "正在清理文档干扰文字并执行解析逻辑...";
-                
-                // 提取完成后，完美接入你原有的过滤和解析逻辑！
-                setTimeout(() => {
-                    this.extract(fullText);
-                }, 100);
-
+                setTimeout(() => { this.extract(fullText); }, 100);
             } catch (err) {
-                alert(`加载失败！请确保 GitHub 仓库中存在文件：${url}\n错误详情: ` + err.message);
+                alert(`加载失败！请确保服务器中存在文件：${url}\n错误详情: ` + err.message);
                 sm.innerText = "加载失败，请刷新页面重试。";
                 buttons.forEach(b => b.disabled = false);
             }
         }
 
         extract(text) {
-            // 深度清理：移除水印和广告字样
             text = text.replace(/店铺：IT认证考试服务|Exam Topic|微信：|www\.examtopic\.com|IT认证考试服务/gi, '');
             
             const blocks = text.split(/(?=QUESTION\s+\d+|问题\s+\d+)/gi);
@@ -233,18 +230,21 @@
 
             blocks.forEach(block => {
                 if (block.length < 50) return;
-                const rawNum = block.match(/(?:QUESTION|问题)\s+(\d+)/i);
-                const rawID = rawNum ? `QUESTION ${rawNum[1]}` : "QUESTION";
+                const rawNumMatch = block.match(/(?:QUESTION|问题)\s+(\d+)/i);
+                
+                // 【提取逻辑题号用于后续排序】
+                const logicNum = rawNumMatch ? parseInt(rawNumMatch[1]) : 9999;
+                const rawID = rawNumMatch ? `QUESTION ${rawNumMatch[1]}` : "QUESTION";
 
-                // 定位选项 (支持中英文 A. 变体)
-                const optRegex = /(?:\s|^)([A-E])[\.．、\s]\s/g;
+                // 【严格选项锚点识别】必须是字母+特定标点 (. ． 、 :)
+                const optRegex = /(?:\s|^)([A-E])[\.．、:]\s/g;
                 let match, anchors = [];
                 while ((match = optRegex.exec(block)) !== null) {
                     anchors.push({ label: match[1], index: match.index, full: match[0] });
                 }
-                if (anchors.length === 0) return;
+                
+                if (anchors.length === 0 || anchors[0].label !== 'A') return;
 
-                // 核心：定位答案和解析的多个可能的关键词
                 const ansKeywords = [/Correct Answer/i, /正确答案/i, /答案/];
                 const expKeywords = [/Explanation\/Reference/i, /解释\/参考/i, /解析参考/i, /解析/i, /Explanation/i];
 
@@ -262,8 +262,11 @@
 
                 const boundary = idxAns !== -1 ? idxAns : block.length;
 
-                // 提取题干并截断 A 之前的垃圾文字
-                let stem = block.substring(0, anchors[0].index).replace(/(QUESTION|问题)\s+\d+/i, '').trim();
+                // 提取题干
+                let stem = block.substring(0, anchors[0].index)
+                                .replace(/(?:QUESTION|问题)\s+\d+/i, '')
+                                .replace(/\s+/g, ' ') 
+                                .trim();
 
                 // 提取选项
                 const options = [];
@@ -279,7 +282,6 @@
                 const ansMatch = ansPart.match(/[:：]\s*([A-E\s,]+)/i);
                 const answer = ansMatch ? ansMatch[1].replace(/[\s,]/g, '').toUpperCase() : "";
 
-                // 强化解析提取：如果找不到关键词，提取答案之后的所有文本
                 let exp = "暂无详细解析。";
                 if (idxExp !== -1) {
                     exp = block.substring(idxExp).replace(/.*[:：]/, '').trim();
@@ -288,29 +290,25 @@
                     if (afterAns.length > 5) exp = afterAns;
                 }
 
-                parsed.push({ rawID, stem, options, answer, explanation: exp });
+                parsed.push({ logicNum, rawID, stem, options, answer, explanation: exp });
             });
+
+            // 【强制逻辑排序】修复PDF读取导致题目顺序错乱的问题
+            parsed.sort((a, b) => a.logicNum - b.logicNum);
 
             if (parsed.length > 0) {
                 localStorage.setItem(this.KEYS.DATA, JSON.stringify(parsed));
                 localStorage.setItem(this.KEYS.ALL_IDX, 0);
                 localStorage.setItem(this.KEYS.WRONG_IDX, 0);
                 location.reload();
-            } else { alert("未识别到有效题库内容，请检查 PDF 格式。"); }
+            } else { alert("未识别到有效题库内容，请检查文档格式。"); }
         }
 
-        get index() {
-            return this.mode === 'all' ? this.allIndex : this.wrongIndex;
-        }
+        get index() { return this.mode === 'all' ? this.allIndex : this.wrongIndex; }
 
         set index(val) {
-            if (this.mode === 'all') {
-                this.allIndex = val;
-                localStorage.setItem(this.KEYS.ALL_IDX, val);
-            } else {
-                this.wrongIndex = val;
-                localStorage.setItem(this.KEYS.WRONG_IDX, val);
-            }
+            if (this.mode === 'all') { this.allIndex = val; localStorage.setItem(this.KEYS.ALL_IDX, val); } 
+            else { this.wrongIndex = val; localStorage.setItem(this.KEYS.WRONG_IDX, val); }
         }
 
         render() {
@@ -346,13 +344,8 @@
 
         toggle(label, el) {
             if (this.isSubmitted) return;
-            if (this.selected.has(label)) {
-                this.selected.delete(label);
-                el.classList.remove('selected');
-            } else {
-                this.selected.add(label);
-                el.classList.add('selected');
-            }
+            if (this.selected.has(label)) { this.selected.delete(label); el.classList.remove('selected'); } 
+            else { this.selected.add(label); el.classList.add('selected'); }
         }
 
         submit() {
@@ -420,6 +413,13 @@
     }
 
     const app = new QuizApp();
+    // 本地上传文件的监听事件，不要覆盖它
+    document.getElementById('upload-section').addEventListener('click', (e) => {
+        // 如果点击的是内部的 button，不要触发 file-input
+        if (e.target.tagName !== 'BUTTON') {
+            document.getElementById('file-input').click();
+        }
+    });
     document.getElementById('file-input').onchange = (e) => { if (e.target.files[0]) app.parse(e.target.files[0]); };
 </script>
 </body>
